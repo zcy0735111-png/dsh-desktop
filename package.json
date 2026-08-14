@@ -1,0 +1,70 @@
+{
+  "name": "dsh-desktop",
+  "productName": "DSH Desktop",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 桌面版：原生窗口运行 DSH Web GUI，自动托管本地服务器",
+  "main": "main.js",
+  "author": "dsh-desktop",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "smoke": "node scripts/smoke-run.js",
+    "smoke:spawn": "node scripts/smoke-run.js --spawn",
+    "manual-test": "node scripts/manual-test.js",
+    "make-icon": "node scripts/make-icon.js",
+    "bundle-dsh": "node scripts/bundle-dsh.js",
+    "dist": "npm run make-icon && npm run bundle-dsh && electron-builder --win dir",
+    "dist:installer": "npm run make-icon && npm run bundle-dsh && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "ai.deepseek.dsh.desktop",
+    "productName": "DSH Desktop",
+    "directories": {
+      "output": "dist",
+      "buildResources": "resources"
+    },
+    "files": [
+      "main.js",
+      "scripts/server.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/dsh/package.json",
+        "to": "dsh/package.json"
+      },
+      {
+        "from": "resources/dsh/package-lock.json",
+        "to": "dsh/package-lock.json"
+      },
+      {
+        "from": "resources/dsh/node_modules",
+        "to": "dsh/node_modules"
+      },
+      {
+        "from": "resources/node/node.exe",
+        "to": "node/node.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ]
+  }
+}

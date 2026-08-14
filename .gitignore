@@ -1,0 +1,12 @@
+node_modules/
+dist/
+resources/dsh/
+resources/node/
+.npm-cache/
+.electron-cache/
+.electron-builder-cache/
+.smoke-*/
+*.log
+smoke*.png
+packaged-smoke.png
+packaged-zero-dep.png
