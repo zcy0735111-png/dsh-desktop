@@ -38,6 +38,19 @@ npm run dist:installer   # 或生成 NSIS 安装包（dist/DSH Desktop Setup *.e
 2. **配置模型凭据**：应用不包含你的任何个人信息（会话、API 密钥都在各自电脑本地）。接收方需要在 GUI 的「设置」里配置自己的模型服务商凭据。
 3. 每个接收方是独立的 DSH 环境：`DSH_HOME` 自动初始化，会话、设置互不影响。
 
+## 发布新版本到 GitHub
+
+```powershell
+# 1) 改版本号（package.json 的 version），重新打包
+npm run dist:installer
+
+# 2) 提交并推送
+git add -A && git commit -m "v0.2.0" && git push
+
+# 3) 建 Release 并上传安装包（需先 gh auth login）
+gh release create v0.2.0 "dist\DSH Desktop Setup 0.2.0.exe" --title "DSH Desktop v0.2.0" --notes-file .release-notes.md
+```
+
 ## 工作原理
 
 ```
