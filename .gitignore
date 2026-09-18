@@ -6,6 +6,7 @@ resources/node/
 .electron-cache/
 .electron-builder-cache/
 .smoke-*/
+.gh-cli/
 .test-broken-home/
 .packaged-broken-home/
 *.log
