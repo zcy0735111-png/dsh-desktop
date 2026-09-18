@@ -5,7 +5,7 @@ const { app, BrowserWindow, dialog, shell } = require('electron');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
-const { ensureServer, killServerTree, sleep } = require('./scripts/server');
+const { ensureServer, killServerTree, sleep, removeBundleFromProfile } = require('./scripts/server');
 
 const isSmoke = process.env.DSH_DESKTOP_SMOKE === '1';
 const smokeOut = process.env.DSH_DESKTOP_SMOKE_OUT;
@@ -62,6 +62,38 @@ async function restartServer() {
   }
 }
 
+// 启动服务器：若因"缺失第三方插件"失败，询问是否忽略该插件（先备份配置）后重试
+async function startServer() {
+  try {
+    return await ensureServer(serverOpts());
+  } catch (err) {
+    if (!err.missingBundle) throw err;
+
+    const autoRepair = isSmoke || process.env.DSH_DESKTOP_AUTO_REPAIR === '1';
+    let choice = 0;
+    if (!autoRepair) {
+      choice = dialog.showMessageBoxSync({
+        type: 'warning',
+        title: '检测到缺失的第三方插件',
+        message: `你的 DSH 配置引用了插件 ${err.missingBundle}，但内置运行时里没有这个包。`,
+        detail: `${err.canRepair ? '选择「忽略该插件并启动」会先自动备份原配置，再移除该插件后继续启动。' : ''}\n\n配置文件：${err.profileManifest}`,
+        buttons: ['忽略该插件并启动', '退出'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+    }
+    if (choice !== 0) {
+      app.exit(1);
+      return null;
+    }
+    if (!err.canRepair) throw err;
+
+    const r = removeBundleFromProfile(err.profileManifest, err.missingBundle);
+    console.log(`[dsh-desktop] 已忽略缺失插件 ${err.missingBundle}（配置备份: ${r.backup}）`);
+    return await ensureServer(serverOpts()); // 移除后重试
+  }
+}
+
 async function main() {
   app.setAppUserModelId('ai.deepseek.dsh.desktop');
 
@@ -74,9 +106,13 @@ async function main() {
     }
   }
 
-  // 1) 确保 DSH 服务器可用（挂接已有实例，或自动拉起）
+  // 1) 确保 DSH 服务器可用（挂接已有实例，或自动拉起；缺失第三方插件时可询问修复）
   try {
-    serverInfo = await ensureServer(serverOpts());
+    serverInfo = await startServer();
+    if (!serverInfo) return; // 用户在修复询问里选择了退出
+    if (serverInfo.runtimeFallback) {
+      console.log(`[dsh-desktop] 已回退到本机其他 DSH 安装以保留第三方插件: ${serverInfo.runtime}`);
+    }
   } catch (err) {
     console.error('[dsh-desktop] 服务器启动失败:', err);
     if (isSmoke) {

@@ -54,6 +54,7 @@ npm run dist:installer   # 或生成 NSIS 安装包（dist/DSH Desktop Setup *.e
 ```
 
 - **端口策略**：从 `3080` 开始逐个探测；页面特征校验（`DeepSeek Harness` + `__DSH_BOOT__`）确认是 DSH 而非其他占用端口的服务。
+- **第三方插件兜底**：若你的 `~/.dsh/profiles/web` 引用了内置运行时没有的插件（例如从其他 DSH 发行版带过来的 `@xxx/dsh-yyy`），应用会依次尝试：① 内置运行时 → ② 本机其他 DSH 安装（含该插件的那个）→ ③ 弹窗询问是否「忽略该插件并启动」（先备份 `package.json`，再移除缺失项后重试）。
 - **日志**：`%APPDATA%\DSH Desktop\server.log`（服务器输出与启动记录）。
 - **新窗口**：GUI 里打开的 `target=_blank` 链接一律转交系统默认浏览器。
 
@@ -75,6 +76,7 @@ npm run dist:installer   # 或生成 NSIS 安装包（dist/DSH Desktop Setup *.e
 ## 常见问题
 
 - **端口被非 DSH 服务占用**：会继续往下一个端口探测；`3080~3103` 全占满时报错。
+- **启动报 `cannot resolve profile bundle '@xxx/yyy'`**：你的 profile 引用了缺失的第三方插件（该包不在公共 npm 上时无法自动装回）。应用会自动尝试用本机其他含该插件的 DSH 安装启动；都没有时弹窗询问是否忽略该插件——选择忽略会先备份 `~/.dsh/profiles/web/package.json`（同目录 `.bak-<时间戳>`），再移除该项后继续启动。想恢复原插件时，把备份文件改回 `package.json` 并重新安装该插件即可。
 - **找不到 DSH 运行时**：开发模式运行 `npm run bundle-dsh`，或设置 `DSH_DESKTOP_DSH_PATH`。
 - **服务器意外退出**：窗口弹出提示，可一键重启（重新挂接或拉起）。
 - **多个实例**：单实例锁，重复启动只会聚焦已有窗口。
@@ -87,9 +89,10 @@ dsh-desktop/
 ├── scripts/
 │   ├── server.js          # 服务器核心逻辑（纯 Node，可独立测试）
 │   ├── manual-test.js     # 纯 Node 冒烟测试（拉起/健康检查/清理）
+│   ├── test-repair.js     # 缺失插件故障的复现与修复链路测试
 │   ├── smoke-run.js       # Electron 冒烟测试运行器（截图验证）
 │   ├── make-icon.js       # 生成应用图标（纯 Node，零依赖）
-│   └── bundle-dsh.js      # 复制 DSH 运行时进 resources/dsh
+│   └── bundle-dsh.js      # 复制 DSH 运行时与 node.exe 进 resources/
 ├── resources/             # 图标 + 打包时内置的 DSH 运行时 (dsh/) 与 node.exe (node/)
 └── dist/                  # 打包产物（win-unpacked/DSH Desktop.exe、Setup 安装包）
 ```
@@ -98,6 +101,7 @@ dsh-desktop/
 
 ```powershell
 npm run manual-test   # 纯 Node：拉起服务器 → 健康检查 → 清理进程树 → 验证端口释放
+npm run test-repair   # 纯 Node：构造"缺失第三方插件"故障 → 验证识别/备份/移除/重启全链路
 npm run smoke         # Electron：挂接已有服务 → 截图 smoke.png
 npm run smoke:spawn   # Electron：自拉服务器（端口 3999）→ 截图 smoke-spawn.png
 ```

@@ -12,6 +12,7 @@
     "smoke": "node scripts/smoke-run.js",
     "smoke:spawn": "node scripts/smoke-run.js --spawn",
     "manual-test": "node scripts/manual-test.js",
+    "test-repair": "node scripts/test-repair.js",
     "make-icon": "node scripts/make-icon.js",
     "bundle-dsh": "node scripts/bundle-dsh.js",
     "dist": "npm run make-icon && npm run bundle-dsh && electron-builder --win dir",

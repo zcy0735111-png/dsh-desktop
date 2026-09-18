@@ -6,7 +6,8 @@ resources/node/
 .electron-cache/
 .electron-builder-cache/
 .smoke-*/
+.test-broken-home/
+.packaged-broken-home/
 *.log
 smoke*.png
-packaged-smoke.png
-packaged-zero-dep.png
+packaged-*.png

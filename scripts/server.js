@@ -46,9 +46,9 @@ function isDshGui(res) {
   );
 }
 
-// 依次查找 DSH 运行时（@deepseek-ai/dsh 包，需含 lib/bin.js）：
+// 列出所有候选 DSH 运行时（含 lib/bin.js 的 @deepseek-ai/dsh 包目录），按优先级排序：
 // 1) DSH_DESKTOP_DSH_PATH 显式指定；2) 应用内置 resources/dsh；3) npm 的 npx 缓存（容忍哈希目录名变化）
-function findDshRuntime({ resourcesRoot } = {}) {
+function listDshRuntimes({ resourcesRoot } = {}) {
   const candidates = [];
   if (process.env.DSH_DESKTOP_DSH_PATH) {
     candidates.push(process.env.DSH_DESKTOP_DSH_PATH);
@@ -66,14 +66,72 @@ function findDshRuntime({ resourcesRoot } = {}) {
   for (const d of dirs) {
     candidates.push(path.join(npxRoot, d, 'node_modules', '@deepseek-ai', 'dsh'));
   }
+  const out = [];
   for (const c of candidates) {
     try {
-      if (fs.statSync(path.join(c, 'lib', 'bin.js')).isFile()) return c;
+      if (fs.statSync(path.join(c, 'lib', 'bin.js')).isFile() && !out.includes(c)) out.push(c);
     } catch {
       /* 继续 */
     }
   }
+  return out;
+}
+
+function findDshRuntime(opts = {}) {
+  const list = listDshRuntimes(opts);
+  return list.length ? list[0] : null;
+}
+
+// 在指定运行时所属的 node_modules 里查找某个 bundle 包
+function runtimeHasBundle(runtime, bundleName) {
+  const nodeModules = path.dirname(path.dirname(runtime)); // .../node_modules/@deepseek-ai/dsh -> .../node_modules
+  try {
+    return fs.statSync(path.join(nodeModules, bundleName, 'package.json')).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// 找一个"含有缺失 bundle"的其他 DSH 安装，用作回退运行时
+function findRuntimeWithBundle(bundleName, { resourcesRoot, skip = [] } = {}) {
+  for (const rt of listDshRuntimes({ resourcesRoot })) {
+    if (skip.includes(rt)) continue;
+    if (runtimeHasBundle(rt, bundleName)) return rt;
+  }
   return null;
+}
+
+// 解析启动失败日志里的缺失 bundle 名（dsh 的报错格式见 dsh-app-boot:resolveBundleDir）。
+// 注意：Node 打印未捕获异常时会回显抛错处的源码行（含 ${JSON.stringify(packageName)} 这类模板文本），
+// 因此这里要求包名必须紧跟引号，避免误匹配源码行。
+function parseMissingBundle(output) {
+  const m = /cannot resolve profile bundle\s+["']([^"'\r\n]+)["']/.exec(output || '');
+  if (!m) return null;
+  const name = m[1].trim();
+  if (!name || name.includes('${')) return null;
+  return name;
+}
+
+function resolveDshHome() {
+  return process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+}
+
+// 从 profile 清单里移除一个无法解析的 bundle（先备份原文件）
+function removeBundleFromProfile(manifestPath, bundleName) {
+  const raw = fs.readFileSync(manifestPath, 'utf8');
+  const json = JSON.parse(raw);
+  const list = json && json.dsh && json.dsh.profile && json.dsh.profile.bundles;
+  if (!Array.isArray(list)) {
+    throw new Error(`profile 清单结构异常，未找到 dsh.profile.bundles: ${manifestPath}`);
+  }
+  const next = list.filter((b) => b !== bundleName);
+  if (next.length === list.length) return { changed: false };
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backup = `${manifestPath}.bak-${stamp}`;
+  fs.copyFileSync(manifestPath, backup);
+  json.dsh.profile.bundles = next;
+  fs.writeFileSync(manifestPath, JSON.stringify(json, null, 2) + '\n');
+  return { changed: true, backup, before: list.length, after: next.length };
 }
 
 function appendLog(logFile, text) {
@@ -120,7 +178,7 @@ async function ensureServer(opts = {}) {
       const res = await httpProbe(port);
       if (isDshGui(res)) {
         appendLog(logFile, `[dsh-desktop] 已连接正在运行的 DSH 服务 http://127.0.0.1:${port}`);
-        return { url: `http://127.0.0.1:${port}`, port, spawned: false, pid: null, runtime, child: null };
+        return { url: `http://127.0.0.1:${port}`, port, spawned: false, pid: null, runtime, child: null, runtimeFallback: false };
       }
     }
   }
@@ -143,14 +201,70 @@ async function ensureServer(opts = {}) {
     port = found;
   }
 
-  // 3) 拉起 dsh web
+  // 3) 拉起 dsh web：依次尝试候选运行时（内置优先），缺失第三方插件时自动回退到含该插件的安装
+  const tried = [];
+  const queue = listDshRuntimes({ resourcesRoot });
+  let lastError = null;
+
+  while (queue.length) {
+    const runtime = queue.shift();
+    if (tried.includes(runtime)) continue;
+    tried.push(runtime);
+
+    const attempt = await tryBoot(runtime, port, { workspace, logFile, resourcesRoot });
+    if (attempt.ok) {
+      return {
+        url: attempt.url,
+        port,
+        spawned: true,
+        pid: attempt.child.pid,
+        runtime,
+        child: attempt.child,
+        runtimeFallback: tried.length > 1,
+      };
+    }
+
+    const missing = parseMissingBundle(attempt.output);
+    if (missing) {
+      appendLog(logFile, `[dsh-desktop] 运行时缺少插件 bundle: ${missing}`);
+      const alt = findRuntimeWithBundle(missing, { resourcesRoot, skip: tried });
+      if (alt) {
+        appendLog(logFile, `[dsh-desktop] 回退到含该插件的运行时: ${alt}`);
+        queue.unshift(alt);
+        continue;
+      }
+      // 没有可用替代 → 抛结构化错误，由界面询问是否忽略该插件
+      const manifest = path.join(resolveDshHome(), 'profiles', 'web', 'package.json');
+      const err = new Error(
+        `DSH 配置引用了插件 ${missing}，但内置运行时和本机其他 DSH 安装里都没有它。\n\n` +
+          `配置文件：${manifest}\n\n` +
+          `可以忽略该插件继续启动（会先自动备份原配置）。`,
+      );
+      err.missingBundle = missing;
+      err.profileManifest = manifest;
+      err.canRepair = fs.existsSync(manifest);
+      throw err;
+    }
+    lastError = attempt.timeout
+      ? new Error(`等待 DSH 服务器就绪超时（${READY_TIMEOUT_MS / 1000}s）。\n\n日志末尾：\n${attempt.output.slice(-2000)}`)
+      : new Error(
+          `DSH 服务器启动失败（pid=${attempt.child.pid}, code=${attempt.child.exitCode}）。\n\n日志末尾：\n${attempt.output.slice(-2000)}`,
+        );
+    break; // 非插件类失败：不再换运行时重试
+  }
+
+  throw lastError || new Error('没有可用的 DSH 运行时。');
+}
+
+// 用指定运行时启动一次 dsh web，等它就绪
+async function tryBoot(runtime, port, { workspace, logFile, resourcesRoot }) {
   const binJs = path.join(runtime, 'lib', 'bin.js');
   const node = resolveNode({ resourcesRoot });
   const child = spawn(node, [binJs, 'web', '--port', String(port)], {
     cwd: workspace || os.homedir(),
     env: {
       ...process.env,
-      DSH_HOME: process.env.DSH_HOME || path.join(os.homedir(), '.dsh'),
+      DSH_HOME: resolveDshHome(),
     },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -170,19 +284,17 @@ async function ensureServer(opts = {}) {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(
-        `DSH 服务器启动失败（pid=${child.pid}, code=${child.exitCode}）。\n\n日志末尾：\n${out.slice(-2000)}`,
-      );
+      return { ok: false, child, output: out };
     }
     const res = await httpProbe(port, 1500);
     if (isDshGui(res)) {
       appendLog(logFile, `[dsh-desktop] DSH 服务器就绪 http://127.0.0.1:${port}`);
-      return { url: `http://127.0.0.1:${port}`, port, spawned: true, pid: child.pid, runtime, child };
+      return { ok: true, child, output: out, url: `http://127.0.0.1:${port}` };
     }
     await sleep(400);
   }
   await killServerTree(child.pid);
-  throw new Error(`等待 DSH 服务器就绪超时（${READY_TIMEOUT_MS / 1000}s）。\n\n日志末尾：\n${out.slice(-2000)}`);
+  return { ok: false, child, output: out, timeout: true };
 }
 
 // 杀掉整个进程树（Windows 用 taskkill /T；其他平台 SIGTERM）
@@ -208,4 +320,17 @@ function killServerTree(pid) {
   });
 }
 
-module.exports = { ensureServer, killServerTree, findDshRuntime, httpProbe, isDshGui, sleep, appendLog };
+module.exports = {
+  ensureServer,
+  killServerTree,
+  findDshRuntime,
+  listDshRuntimes,
+  findRuntimeWithBundle,
+  parseMissingBundle,
+  removeBundleFromProfile,
+  resolveDshHome,
+  httpProbe,
+  isDshGui,
+  sleep,
+  appendLog,
+};
