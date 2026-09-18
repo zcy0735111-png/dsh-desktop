@@ -1,5 +1,7 @@
 # DSH Desktop — DeepSeek Harness 桌面版
 
+**[⬇️ 下载最新安装包（Releases）](https://github.com/zcy0735111-png/dsh-desktop/releases/latest)** — x64 Windows 10/11，零依赖，双击安装即用
+
 把 DeepSeek Harness 的 Web GUI 封装成 Windows 原生桌面应用：
 
 - 双击即用，独立窗口运行 GUI（不再依赖浏览器标签页）
